@@ -6,7 +6,7 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2025 STMicroelectronics.
+  * Copyright (c) 2026 STMicroelectronics.
   * All rights reserved.
   *
   * This software is licensed under terms that can be found in the LICENSE file
@@ -18,11 +18,11 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include <mpu6050.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "mpu6050.h"
+#include "sht3x.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,18 +43,28 @@
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
+UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 volatile uint8_t mpu_data_ready = 0;
 MPU6050_t mpu;
+uint32_t mpu_last_tick = 0;
 
+char uart_buf[128];
+
+SHT3x_t sht;
+float sht_temp = 0.0f;
+float sht_hum  = 0.0f;
+
+uint32_t sht_last_tick = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
@@ -95,14 +105,9 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
+  MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-//  if (MPU6050_Init(MPU6050_Accelerometer_2G,
-//                   MPU6050_Gyroscope_250_deg,
-//                   MPU6050_DataRate_1KHz) != MPU6050_SUCCESS)
-//  {
-//    Error_Handler();
-//  }
   if (MPU6050_Init(MPU6050_Accelerometer_2G,
                    MPU6050_Gyroscope_250_deg,
                    MPU6050_DataRate_1KHz) == MPU6050_SUCCESS)
@@ -113,10 +118,19 @@ int main(void)
   {
       printf("MPU6050 INIT FAIL\r\n");
   }
-//  MPU6050_set_power_mode(MPU6050_POWER_ON, 0);
+
+  sht.hi2c   = &hi2c1;
+  sht.address = SHT3X_ADDR_LOW;
+
+  if (SHT3x_Init(&sht)) {
+      printf("SHT3x INIT OK\r\n");
+  } else {
+      printf("SHT3x INIT FAIL\r\n");
+  }
+
 
   // Enable DATA_READY interrupt
-  MPU6050_enable_irq(LATCH_IRQ_EN | IRQ_RD_CLEAR);
+//  MPU6050_enable_irq(LATCH_IRQ_EN | IRQ_RD_CLEAR);
 
   /* USER CODE END 2 */
 
@@ -124,18 +138,52 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	if (mpu_data_ready)
-	{
-		mpu_data_ready = 0;
+	  char buf[64];
 
-		MPU6050_Read_All(&mpu);
+	  MPU6050_Read_All(&mpu);
 
-	    MPU6050_get_irq_status();
+	  int len = snprintf(buf, sizeof(buf),
+	      "RAW ax=%d ay=%d az=%d gx=%d gy=%d\r\n",
+	      mpu.Accel_X_RAW,
+	      mpu.Accel_Y_RAW,
+	      mpu.Gyro_X_RAW,
+	      mpu.Gyro_Y_RAW,
+	      mpu.Gyro_Z_RAW
+	  );
 
-		// For debug
-		printf("Ax=%.2f Ay=%.2f Az=%.2f\r\n",
-				mpu.Ax, mpu.Ay, mpu.Az);
-	}
+	  HAL_UART_Transmit(&huart2, (uint8_t*)buf, len, HAL_MAX_DELAY);
+	  HAL_Delay(200);
+//	    /* ===== SHT3x ===== */
+//	    if (HAL_GetTick() - sht_last_tick >= 1000) {
+//	        sht_last_tick = HAL_GetTick();
+//
+//	        if (SHT3x_ReadTempHum(&sht, &sht_temp, &sht_hum)) {
+//	            printf("$SHT,%.2f,%.2f\r\n", sht_temp, sht_hum);
+//	        } else {
+//	            printf("SHT READ FAIL\r\n");
+//	        }
+//	    }
+//
+//	    /* ===== MPU6050: throttle 20Hz ===== */
+//	    if (mpu_data_ready && (HAL_GetTick() - mpu_last_tick >= 50)) {
+//	        mpu_data_ready = 0;
+//	        mpu_last_tick = HAL_GetTick();
+//
+//	        MPU6050_Read_All(&mpu);
+//
+//	        int len = snprintf(uart_buf, sizeof(uart_buf),
+//	            "$IMU,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\r\n",
+//	            mpu.Ax, mpu.Ay, mpu.Az,
+//	            mpu.Gx, mpu.Gy,
+//	            mpu.KalmanAngleY,
+//	            mpu.KalmanAngleX
+//	        );
+//
+//	        HAL_UART_Transmit(&huart2,
+//	                          (uint8_t*)uart_buf,
+//	                          len,
+//	                          HAL_MAX_DELAY);
+//	    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -219,6 +267,39 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -284,10 +365,10 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 int _write(int file, char *ptr, int len)
 {
-  HAL_UART_Transmit(&huart2, (uint8_t *)ptr, len, HAL_MAX_DELAY);
-  return len;
+//  HAL_UART_Transmit(&huart1, (uint8_t *)ptr, len, HAL_MAX_DELAY); // TODO fix
+	HAL_UART_Transmit(&huart1, (uint8_t *)ptr, len, HAL_MAX_DELAY);
+	return len;
 }
-
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
