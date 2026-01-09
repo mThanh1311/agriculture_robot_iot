@@ -1,0 +1,3 @@
+../Core/Src/sht3x.c:12:16:crc8	4
+../Core/Src/sht3x.c:23:6:SHT3x_Init	1
+../Core/Src/sht3x.c:32:6:SHT3x_ReadTempHum	5
